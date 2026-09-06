@@ -249,6 +249,22 @@ var _ = Describe("Ray Controller", Ordered, func() {
 				g.Expect(k8sClient.Status().Update(ctx, dep)).To(Succeed())
 			}, timeout, interval).Should(Succeed())
 
+			By("verifying Ready is True once deployments are available")
+			Eventually(func(g Gomega) {
+				ray := &componentsv1alpha1.Ray{}
+				g.Expect(k8sClient.Get(ctx, rayCR, ray)).To(Succeed())
+
+				found := false
+				for _, c := range ray.Status.Conditions {
+					if c.Type == string(common.ConditionTypeReady) {
+						g.Expect(string(c.Status)).To(Equal("True"))
+						found = true
+						break
+					}
+				}
+				g.Expect(found).To(BeTrue(), "Ready condition not found")
+			}, timeout, interval).Should(Succeed())
+
 			By("verifying standalone status.distribution after rollout")
 			Eventually(func(g Gomega) {
 				ray := &componentsv1alpha1.Ray{}

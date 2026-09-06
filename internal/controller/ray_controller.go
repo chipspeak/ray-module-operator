@@ -96,10 +96,12 @@ func SetupWithManager(ctx context.Context, mgr ctrl.Manager, manifestsBasePath s
 		deletionTimestampSetPredicate(),
 	))).
 		WithInstanceName(constants.InstanceName).
+		// Ready is the AND of these conditions being True. Degraded is a
+		// negative-polarity status (False means healthy) so it must not be
+		// listed here — otherwise Ready stays False while the module is fine.
 		WithConditions(
 			string(common.ConditionTypeProvisioningSucceeded),
 			constants.ConditionDeploymentsAvailable,
-			constants.ConditionDegraded,
 		).
 		WithDynamicOwnership().
 		Watches(
