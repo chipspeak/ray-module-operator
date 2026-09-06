@@ -19,7 +19,10 @@ package controller
 import (
 	"testing"
 
+	"github.com/opendatahub-io/odh-platform-utilities/framework/controller/actions/gc"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/opendatahub-io/ray-module-operator/internal/constants"
 )
 
 func TestForceNamespacedResources_OverridesHardcodedNamespace(t *testing.T) {
@@ -52,5 +55,43 @@ func TestForceNamespacedResources_OverridesHardcodedNamespace(t *testing.T) {
 	}
 	if got := objs[1].GetNamespace(); got != "" {
 		t.Errorf("ClusterRole namespace = %q, want empty", got)
+	}
+}
+
+func TestStampPartOfLabels(t *testing.T) {
+	objs := []unstructured.Unstructured{
+		{
+			Object: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]any{
+					"name": "kuberay-operator",
+					"labels": map[string]any{
+						"app": "kuberay-operator",
+					},
+				},
+			},
+		},
+		{
+			Object: map[string]any{
+				"apiVersion": "apiextensions.k8s.io/v1",
+				"kind":       "CustomResourceDefinition",
+				"metadata": map[string]any{
+					"name": "fakes.lifecycle.ray.test.io",
+				},
+			},
+		},
+	}
+
+	stampPartOfLabels(objs)
+
+	if got := objs[0].GetLabels()[gc.DefaultPartOfLabelKey]; got != constants.ComponentName {
+		t.Errorf("Deployment part-of = %q, want %s", got, constants.ComponentName)
+	}
+	if objs[0].GetLabels()["app"] != "kuberay-operator" {
+		t.Errorf("existing app label was dropped")
+	}
+	if _, ok := objs[1].GetLabels()[gc.DefaultPartOfLabelKey]; ok {
+		t.Errorf("CRD must not get part-of label")
 	}
 }
