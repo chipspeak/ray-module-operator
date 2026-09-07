@@ -22,9 +22,12 @@ import (
 	"path/filepath"
 
 	"github.com/opendatahub-io/odh-platform-utilities/framework/controller/actions"
+	"github.com/opendatahub-io/odh-platform-utilities/framework/controller/actions/gc"
 	"github.com/opendatahub-io/odh-platform-utilities/framework/controller/types"
 	"github.com/opendatahub-io/odh-platform-utilities/pkg/render/kustomize"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/opendatahub-io/ray-module-operator/internal/constants"
 )
 
 // RenderKustomize returns an action that renders Kustomize manifests from
@@ -66,6 +69,7 @@ func RenderKustomize(basePath string, namespaceFn actions.Getter[string]) action
 			// RHOAI operand YAML hardcodes redhat-ods-applications on some
 			// namespaced objects; kustomize does not always override those.
 			forceNamespacedResources(ns, resources)
+			stampPartOfLabels(resources)
 
 			rr.Resources = append(rr.Resources, resources...)
 		}
@@ -85,5 +89,25 @@ func forceNamespacedResources(ns string, objs []unstructured.Unstructured) {
 		if objs[i].GetNamespace() != "" {
 			objs[i].SetNamespace(ns)
 		}
+	}
+}
+
+// stampPartOfLabels always sets platform.opendatahub.io/part-of on rendered
+// operands. Framework GC lists by that label; the deploy action only adds it
+// when the desired object is missing it, so a kustomize/SSA pass can drop it
+// and Removed then never sees the object. CRDs stay unlabeled so GC's
+// unremovable CRD rule is not the only thing keeping them.
+func stampPartOfLabels(objs []unstructured.Unstructured) {
+	for i := range objs {
+		if objs[i].GetKind() == "CustomResourceDefinition" {
+			continue
+		}
+
+		labels := objs[i].GetLabels()
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels[gc.DefaultPartOfLabelKey] = constants.ComponentName
+		objs[i].SetLabels(labels)
 	}
 }

@@ -57,7 +57,10 @@ func TestDegradedAction(t *testing.T) {
 			Generation: 3,
 		},
 	}
-	mgr := conditions.NewManager(ray, "Ready", constants.ConditionDeploymentsAvailable, constants.ConditionDegraded)
+	mgr := conditions.NewManager(ray, "Ready",
+		string(common.ConditionTypeProvisioningSucceeded),
+		constants.ConditionDeploymentsAvailable,
+	)
 
 	rr := &types.ReconciliationRequest{Instance: ray, Conditions: mgr}
 	if err := degradedAction()(context.Background(), rr); err != nil {
@@ -73,6 +76,38 @@ func TestDegradedAction(t *testing.T) {
 	}
 	if c.Reason != "AsExpected" {
 		t.Fatalf("Degraded reason = %q, want AsExpected", c.Reason)
+	}
+}
+
+func TestReadyIndependentOfDegraded(t *testing.T) {
+	ray := &componentsv1alpha1.Ray{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       constants.InstanceName,
+			Generation: 3,
+		},
+	}
+	mgr := conditions.NewManager(ray, "Ready",
+		string(common.ConditionTypeProvisioningSucceeded),
+		constants.ConditionDeploymentsAvailable,
+	)
+	mgr.MarkTrue(string(common.ConditionTypeProvisioningSucceeded))
+	mgr.MarkTrue(constants.ConditionDeploymentsAvailable)
+
+	rr := &types.ReconciliationRequest{Instance: ray, Conditions: mgr}
+	if err := degradedAction()(context.Background(), rr); err != nil {
+		t.Fatalf("degradedAction: %v", err)
+	}
+
+	if !mgr.IsHappy() {
+		t.Fatal("Ready should be True when ProvisioningSucceeded and DeploymentsAvailable are True; Degraded=False must not block Ready")
+	}
+	ready := mgr.GetCondition("Ready")
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Fatalf("Ready = %#v, want True", ready)
+	}
+	degraded := mgr.GetCondition(constants.ConditionDegraded)
+	if degraded == nil || degraded.Status != metav1.ConditionFalse {
+		t.Fatalf("Degraded = %#v, want False", degraded)
 	}
 }
 

@@ -96,10 +96,12 @@ func SetupWithManager(ctx context.Context, mgr ctrl.Manager, manifestsBasePath s
 		deletionTimestampSetPredicate(),
 	))).
 		WithInstanceName(constants.InstanceName).
+		// Ready is the AND of these conditions being True. Degraded is a
+		// negative-polarity status (False means healthy) so it must not be
+		// listed here — otherwise Ready stays False while the module is fine.
 		WithConditions(
 			string(common.ConditionTypeProvisioningSucceeded),
 			constants.ConditionDeploymentsAvailable,
-			constants.ConditionDegraded,
 		).
 		WithDynamicOwnership().
 		Watches(
@@ -190,7 +192,13 @@ func reconcileGCAction(nsFn actions.Getter[string]) actions.Fn {
 	return func(ctx context.Context, rr *types.ReconciliationRequest) error {
 		removed, _ := rr.Extensions[constants.ExtKeyRemoved].(bool)
 		if removed {
-			return removedGC(ctx, rr)
+			if err := removedGC(ctx, rr); err != nil {
+				return err
+			}
+			// Label-selector GC misses operands whose part-of label was
+			// dropped after Ready=True SSA. Controller ownerRef still
+			// points at the Ray CR.
+			return deleteOwnedOperands(ctx, rr)
 		}
 
 		return managedGC(ctx, rr)
@@ -228,7 +236,11 @@ func deletionCleanupAction(nsFn actions.Getter[string]) actions.Fn {
 
 		rr.Generated = true
 
-		return gcFn(ctx, rr)
+		if err := gcFn(ctx, rr); err != nil {
+			return err
+		}
+
+		return deleteOwnedOperands(ctx, rr)
 	}
 }
 
