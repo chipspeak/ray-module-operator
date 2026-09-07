@@ -32,7 +32,9 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/opendatahub-io/odh-platform-utilities/framework/controller/actions/gc"
 	componentsv1alpha1 "github.com/opendatahub-io/ray-module-operator/api/v1alpha1"
+	"github.com/opendatahub-io/ray-module-operator/internal/constants"
 )
 
 // namespacedOwnedLists are operand kinds rendered into applicationsNamespace.
@@ -104,7 +106,7 @@ func deleteOwnedFromList(ctx context.Context, cli client.Client, ownerUID k8styp
 		if !ok {
 			continue
 		}
-		if !ownedByUID(obj, ownerUID) {
+		if !ownedByUID(obj, ownerUID) && !labeledOperand(obj) {
 			continue
 		}
 
@@ -114,6 +116,10 @@ func deleteOwnedFromList(ctx context.Context, cli client.Client, ownerUID k8styp
 	}
 
 	return nil
+}
+
+func labeledOperand(obj client.Object) bool {
+	return obj.GetLabels()[gc.DefaultPartOfLabelKey] == constants.ComponentName
 }
 
 func ownedByUID(obj client.Object, ownerUID k8stypes.UID) bool {

@@ -83,6 +83,39 @@ func TestDeleteOwnedOperandsRemovesOwnedDeployment(t *testing.T) {
 	}
 }
 
+func TestDeleteOwnedOperandsRemovesLabeledDeploymentWithoutOwner(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := componentsv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("apps scheme: %v", err)
+	}
+
+	const ownerUID k8stypes.UID = "ray-uid"
+	ray := &componentsv1alpha1.Ray{
+		ObjectMeta: metav1.ObjectMeta{Name: constants.InstanceName, UID: ownerUID},
+		Spec:       componentsv1alpha1.RaySpec{ApplicationsNamespace: "apps"},
+	}
+	labeled := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kuberay-operator",
+			Namespace: "apps",
+			Labels:    map[string]string{"platform.opendatahub.io/part-of": constants.ComponentName},
+		},
+	}
+
+	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ray, labeled).Build()
+	rr := &types.ReconciliationRequest{Client: cli, Instance: ray}
+	if err := deleteOwnedOperands(context.Background(), rr); err != nil {
+		t.Fatalf("deleteOwnedOperands: %v", err)
+	}
+
+	if err := cli.Get(context.Background(), client.ObjectKeyFromObject(labeled), &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("labeled Deployment still present: %v", err)
+	}
+}
+
 func TestOwnedByUID(t *testing.T) {
 	if ownedByUID(&appsv1.Deployment{}, "x") {
 		t.Fatal("empty ownerRefs should not match")
