@@ -18,12 +18,14 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/opendatahub-io/odh-platform-utilities/api/common"
 	"github.com/opendatahub-io/odh-platform-utilities/framework/controller/actions"
+	"github.com/opendatahub-io/odh-platform-utilities/framework/controller/conditions"
 	"github.com/opendatahub-io/odh-platform-utilities/framework/controller/types"
 
 	componentsv1alpha1 "github.com/opendatahub-io/ray-module-operator/api/v1alpha1"
@@ -36,6 +38,33 @@ func releasesAction(basePath string) actions.Fn {
 		ray.SetReleaseStatus(common.ComponentReleaseStatus{
 			Releases: desiredModuleReleases(resolveKubeRayVersion(basePath)),
 		})
+
+		return nil
+	}
+}
+
+func platformReleaseAction() actions.Fn {
+	return func(ctx context.Context, rr *types.ReconciliationRequest) error {
+		if rr.Extensions != nil {
+			if removed, _ := rr.Extensions[constants.ExtKeyRemoved].(bool); removed {
+				return nil
+			}
+		}
+
+		if !conditions.IsStatusConditionTrue(rr.Instance, constants.ConditionDeploymentsAvailable) {
+			return nil
+		}
+
+		ray := rr.Instance.(*componentsv1alpha1.Ray)
+		version, err := readPlatformVersion(ctx, rr.Client, ray.Spec.ApplicationsNamespace)
+		if err != nil {
+			return fmt.Errorf("read platform version: %w", err)
+		}
+		if version == "" {
+			return nil
+		}
+
+		ray.Status.SetPlatformRelease(version)
 
 		return nil
 	}

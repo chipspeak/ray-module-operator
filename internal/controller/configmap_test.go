@@ -30,6 +30,11 @@ import (
 	"github.com/opendatahub-io/ray-module-operator/internal/constants"
 )
 
+const (
+	testDistributionVersion = "2.20.0"
+	testPlatformVersion     = "3.5.1"
+)
+
 func TestValidateReleaseVersion(t *testing.T) {
 	t.Parallel()
 
@@ -39,7 +44,7 @@ func TestValidateReleaseVersion(t *testing.T) {
 		version string
 		wantErr bool
 	}{
-		{name: "plain semver", version: "2.20.0", wantErr: false},
+		{name: "plain semver", version: testDistributionVersion, wantErr: false},
 		{name: "v-prefixed semver", version: "v2.20.0", wantErr: false},
 		{name: "invalid semver", version: "not-a-semver", wantErr: true},
 		{name: "too long", version: tooLong, wantErr: true},
@@ -156,7 +161,7 @@ func TestReadPlatformDistributionFromConfigMap(t *testing.T) {
 		},
 		Data: map[string]string{
 			constants.PlatformNameKey:    "OpenDataHub",
-			constants.PlatformVersionKey: "2.20.0",
+			constants.PlatformVersionKey: testDistributionVersion,
 		},
 	}
 	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
@@ -168,7 +173,7 @@ func TestReadPlatformDistributionFromConfigMap(t *testing.T) {
 	if status != distributionOK {
 		t.Fatalf("status = %v, want OK", status)
 	}
-	if dist.Name != "OpenDataHub" || dist.Version != "2.20.0" {
+	if dist.Name != "OpenDataHub" || dist.Version != testDistributionVersion {
 		t.Fatalf("dist = %#v, want OpenDataHub/2.20.0", dist)
 	}
 }
@@ -210,6 +215,30 @@ func TestReadPlatformDistributionEmptyNamespace(t *testing.T) {
 	}
 }
 
+func TestReadPlatformVersion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add corev1 scheme: %v", err)
+	}
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      constants.PlatformConfigMapName,
+			Namespace: "redhat-ods-applications",
+		},
+		Data: map[string]string{constants.PlatformHandshakeKey: testPlatformVersion},
+	}
+	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+
+	version, err := readPlatformVersion(context.Background(), cli, "redhat-ods-applications")
+	if err != nil {
+		t.Fatalf("readPlatformVersion: %v", err)
+	}
+	if version != testPlatformVersion {
+		t.Fatalf("platform version = %q, want 3.5.1", version)
+	}
+}
+
 func TestReadPlatformDistributionDefaultsName(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -222,7 +251,7 @@ func TestReadPlatformDistributionDefaultsName(t *testing.T) {
 			Namespace: "redhat-ods-applications",
 		},
 		Data: map[string]string{
-			constants.PlatformVersionKey: "3.5.1",
+			constants.PlatformVersionKey: testPlatformVersion,
 		},
 	}
 	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
@@ -234,7 +263,7 @@ func TestReadPlatformDistributionDefaultsName(t *testing.T) {
 	if status != distributionOK {
 		t.Fatalf("status = %v, want OK", status)
 	}
-	if dist.Name != constants.StandaloneDistributionName || dist.Version != "3.5.1" {
+	if dist.Name != constants.StandaloneDistributionName || dist.Version != testPlatformVersion {
 		t.Fatalf("dist = %#v, want Standalone/3.5.1", dist)
 	}
 }

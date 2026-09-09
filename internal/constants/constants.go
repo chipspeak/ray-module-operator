@@ -35,12 +35,13 @@ const (
 	// cleaned up. CRDs are not removed.
 	FinalizerName = "platform.opendatahub.io/finalizer"
 
-	// PlatformConfigMapName is the ConfigMap the module operator reads for
-	// distribution handshake. In production the platform operator overwrites
-	// these values; the module ships a default copy for standalone operation.
-	PlatformConfigMapName = "opendatahub-ray-config"
+	// PlatformConfigMapName is the per-module ConfigMap managed by the platform
+	// operator. It contains both module-specific distribution data and the
+	// platform-version handshake value.
+	PlatformConfigMapName = "odh-ray-config"
 	PlatformNameKey       = "distribution.name"
 	PlatformVersionKey    = "distribution.version"
+	PlatformHandshakeKey  = "platformVersion"
 
 	StandaloneDistributionName = "Standalone"
 

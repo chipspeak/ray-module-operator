@@ -111,6 +111,28 @@ func readPlatformDistribution(ctx context.Context, cli client.Client, appsNamesp
 	return componentsv1alpha1.Distribution{Name: name, Version: version}, distributionOK, nil
 }
 
+func readPlatformVersion(ctx context.Context, cli client.Client, appsNamespace string) (string, error) {
+	if appsNamespace == "" {
+		return "", nil
+	}
+
+	cm := &corev1.ConfigMap{}
+	if err := cli.Get(ctx, types.NamespacedName{
+		Name:      constants.PlatformConfigMapName,
+		Namespace: appsNamespace,
+	}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+
+		return "", fmt.Errorf(
+			"get platform config ConfigMap %s/%s: %w",
+			appsNamespace, constants.PlatformConfigMapName, err)
+	}
+
+	return cm.Data[constants.PlatformHandshakeKey], nil
+}
+
 func standaloneDistribution(moduleVersion string) componentsv1alpha1.Distribution {
 	if moduleVersion == "" {
 		moduleVersion = constants.StandaloneDistributionVersion

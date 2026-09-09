@@ -71,8 +71,9 @@ var _ = Describe("Ray Controller", Ordered, func() {
 				Namespace: testNamespace,
 			},
 			Data: map[string]string{
-				constants.PlatformNameKey:    constants.StandaloneDistributionName,
-				constants.PlatformVersionKey: "0.0.0",
+				constants.PlatformNameKey:      constants.StandaloneDistributionName,
+				constants.PlatformVersionKey:   "0.0.0",
+				constants.PlatformHandshakeKey: "0.0.0",
 			},
 		}
 		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, cm))).To(Succeed())
@@ -266,6 +267,13 @@ var _ = Describe("Ray Controller", Ordered, func() {
 				g.Expect(found).To(BeTrue(), "Ready condition not found")
 			}, timeout, interval).Should(Succeed())
 
+			By("verifying the platform release is stamped after rollout")
+			Eventually(func(g Gomega) {
+				ray := &componentsv1alpha1.Ray{}
+				g.Expect(k8sClient.Get(ctx, rayCR, ray)).To(Succeed())
+				g.Expect(ray.Status.GetPlatformRelease()).To(Equal("0.0.0"))
+			}, timeout, interval).Should(Succeed())
+
 			By("verifying standalone status.distribution after rollout")
 			Eventually(func(g Gomega) {
 				ray := &componentsv1alpha1.Ray{}
@@ -285,7 +293,8 @@ var _ = Describe("Ray Controller", Ordered, func() {
 				Namespace: testNamespace,
 			}, cm)).To(Succeed())
 			cm.Data[constants.PlatformNameKey] = "OpenDataHub"
-			cm.Data[constants.PlatformVersionKey] = "2.20.0"
+			cm.Data[constants.PlatformVersionKey] = testDistributionVersion
+			cm.Data[constants.PlatformHandshakeKey] = testDistributionVersion
 			Expect(k8sClient.Update(ctx, cm)).To(Succeed())
 
 			By("verifying status.distribution matches the ConfigMap")
@@ -294,9 +303,10 @@ var _ = Describe("Ray Controller", Ordered, func() {
 				g.Expect(k8sClient.Get(ctx, rayCR, ray)).To(Succeed())
 				g.Expect(ray.Status.ObservedGeneration).To(Equal(ray.Generation))
 				g.Expect(ray.Status.Distribution.Name).To(Equal("OpenDataHub"))
-				g.Expect(ray.Status.Distribution.Version).To(Equal("2.20.0"))
-				g.Expect(ray.Status.Releases).To(HaveLen(1))
+				g.Expect(ray.Status.Distribution.Version).To(Equal(testDistributionVersion))
+				g.Expect(ray.Status.Releases).To(HaveLen(2))
 				g.Expect(ray.Status.Releases[0].Name).To(Equal(constants.KubeRayReleaseName))
+				g.Expect(ray.Status.GetPlatformRelease()).To(Equal(testDistributionVersion))
 			}, timeout, interval).Should(Succeed())
 		})
 	})
@@ -326,7 +336,7 @@ var _ = Describe("Ray Controller", Ordered, func() {
 				ray := &componentsv1alpha1.Ray{}
 				g.Expect(k8sClient.Get(ctx, rayCR, ray)).To(Succeed())
 				g.Expect(ray.Status.Distribution.Name).To(Equal("OpenDataHub"))
-				g.Expect(ray.Status.Distribution.Version).To(Equal("2.20.0"))
+				g.Expect(ray.Status.Distribution.Version).To(Equal(testDistributionVersion))
 			}, 3*time.Second, interval).Should(Succeed())
 		})
 	})

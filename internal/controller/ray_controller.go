@@ -121,6 +121,7 @@ func SetupWithManager(ctx context.Context, mgr ctrl.Manager, manifestsBasePath s
 		WithAction(manifestInitAction()).
 		WithAction(applyImageParamsAction(manifestsBasePath)).
 		WithAction(RenderKustomize(manifestsBasePath, nsFn)).
+		WithAction(certManagerRequirementAction()).
 		WithAction(filterPlatformResources(mapper)).
 		WithAction(notebookClusterRoleAction()).
 		WithAction(deploy.NewAction(
@@ -130,6 +131,7 @@ func SetupWithManager(ctx context.Context, mgr ctrl.Manager, manifestsBasePath s
 		)).
 		WithAction(deploymentStatusAction(nsFn)).
 		WithAction(distributionAction(manifestsBasePath)).
+		WithAction(platformReleaseAction()).
 		WithAction(degradedAction()).
 		WithAction(observedGenerationAction()).
 		WithAction(reconcileGCAction(nsFn)).

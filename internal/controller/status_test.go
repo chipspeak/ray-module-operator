@@ -183,7 +183,7 @@ func TestDistributionActionFromConfigMap(t *testing.T) {
 		},
 		Data: map[string]string{
 			constants.PlatformNameKey:    "SelfManagedRHOAI",
-			constants.PlatformVersionKey: "3.5.1",
+			constants.PlatformVersionKey: testPlatformVersion,
 		},
 	}
 	ray := &componentsv1alpha1.Ray{
@@ -206,7 +206,7 @@ func TestDistributionActionFromConfigMap(t *testing.T) {
 	if err := distributionAction("")(context.Background(), rr); err != nil {
 		t.Fatalf("distributionAction: %v", err)
 	}
-	if ray.Status.Distribution.Name != "SelfManagedRHOAI" || ray.Status.Distribution.Version != "3.5.1" {
+	if ray.Status.Distribution.Name != "SelfManagedRHOAI" || ray.Status.Distribution.Version != testPlatformVersion {
 		t.Fatalf("distribution = %#v, want SelfManagedRHOAI/3.5.1", ray.Status.Distribution)
 	}
 }
@@ -253,5 +253,46 @@ func TestDistributionActionSkipsInvalidVersion(t *testing.T) {
 	}
 	if ray.Status.Distribution.Name != "kept" || ray.Status.Distribution.Version != "1.0.0" {
 		t.Fatalf("distribution = %#v, want previous value retained", ray.Status.Distribution)
+	}
+}
+
+func TestPlatformReleaseActionAfterDeploymentsAvailable(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := componentsv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Ray scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add corev1 scheme: %v", err)
+	}
+
+	ray := &componentsv1alpha1.Ray{
+		ObjectMeta: metav1.ObjectMeta{Name: constants.InstanceName},
+		Spec: componentsv1alpha1.RaySpec{
+			ApplicationsNamespace: "redhat-ods-applications",
+		},
+		Status: componentsv1alpha1.RayStatus{
+			Status: common.Status{Conditions: []common.Condition{{
+				Type:   constants.ConditionDeploymentsAvailable,
+				Status: metav1.ConditionTrue,
+			}}},
+		},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      constants.PlatformConfigMapName,
+			Namespace: "redhat-ods-applications",
+		},
+		Data: map[string]string{constants.PlatformHandshakeKey: testPlatformVersion},
+	}
+	rr := &types.ReconciliationRequest{
+		Instance: ray,
+		Client:   fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build(),
+	}
+
+	if err := platformReleaseAction()(context.Background(), rr); err != nil {
+		t.Fatalf("platformReleaseAction: %v", err)
+	}
+	if got := ray.Status.GetPlatformRelease(); got != testPlatformVersion {
+		t.Fatalf("platform release = %q, want 3.5.1", got)
 	}
 }
