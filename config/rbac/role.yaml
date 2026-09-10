@@ -268,9 +268,19 @@ rules:
   resources:
   - rayclusters/status
   - raycronjobs/status
-  - rayjobs/status
   - rayservices/status
   verbs:
+  - get
+  - list
+  - patch
+  - update
+- apiGroups:
+  - ray.io
+  resources:
+  - rayjobs/status
+  verbs:
+  - create
+  - delete
   - get
   - list
   - patch
