@@ -40,9 +40,63 @@ func applicationsNamespace() string {
 	return "opendatahub"
 }
 
+const (
+	platformHandshakeVersion = "3.6.0-e2e"
+	rayClusterProbeName      = "e2e-webhook-probe"
+)
+
 func kubectlGetJsonpath(args ...string) (string, error) {
 	cmd := exec.Command("kubectl", args...)
 	return utils.Run(cmd)
+}
+
+func applyYAML(manifest string) (string, error) {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(manifest)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func rayClusterManifest(ns, name string) string {
+	return fmt.Sprintf(`
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  rayVersion: "2.46.0"
+  headGroupSpec:
+    rayStartParams: {}
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: quay.io/opendatahub/ray:2.46.0-py311-cu121
+          ports:
+          - containerPort: 6379
+            name: gcs
+          - containerPort: 8265
+            name: dashboard
+          - containerPort: 10001
+            name: client
+`, name, ns)
+}
+
+func ensurePlatformConfigMap(ns string) {
+	GinkgoHelper()
+	out, err := applyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: odh-ray-config
+  namespace: %s
+data:
+  platformVersion: %s
+  distribution.name: OpenDataHub
+  distribution.version: %s
+`, ns, platformHandshakeVersion, platformHandshakeVersion))
+	Expect(err).NotTo(HaveOccurred(), "failed to create odh-ray-config: %s", out)
 }
 
 var _ = Describe("Module CR Validation", func() {
@@ -66,9 +120,11 @@ var _ = Describe("Module Contract Conformance", Ordered, func() {
 	ns := applicationsNamespace()
 
 	BeforeAll(func() {
+		By("creating the platform handshake ConfigMap")
+		ensurePlatformConfigMap(ns)
+
 		By("creating the Ray module CR explicitly")
-		cmd := exec.Command("kubectl", "apply", "-f", "-")
-		cmd.Stdin = strings.NewReader(fmt.Sprintf(`
+		out, err := applyYAML(fmt.Sprintf(`
 apiVersion: components.platform.opendatahub.io/v1alpha1
 kind: Ray
 metadata:
@@ -77,8 +133,7 @@ spec:
   managementState: Managed
   applicationsNamespace: %s
 `, ns))
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "failed to create Ray CR")
+		Expect(err).NotTo(HaveOccurred(), "failed to create Ray CR: %s", out)
 
 		By("waiting for the Ray module CR to be Ready")
 		Eventually(func(g Gomega) {
@@ -126,6 +181,15 @@ spec:
 			g.Expect(err).NotTo(HaveOccurred(), "failed to check webhook cleanup")
 			g.Expect(strings.TrimSpace(out)).To(BeEmpty(), "Ray webhooks should be removed")
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+		By("verifying RayCluster CRDs remain after module cleanup")
+		out, err := kubectlGetJsonpath("get", "crd", "rayclusters.ray.io", "-o", "name")
+		Expect(err).NotTo(HaveOccurred(), "RayCluster CRD should remain")
+		Expect(strings.TrimSpace(out)).To(Equal("customresourcedefinition.apiextensions.k8s.io/rayclusters.ray.io"))
+
+		By("removing the platform handshake ConfigMap")
+		cmd = exec.Command("kubectl", "delete", "configmap", "odh-ray-config", "-n", ns, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
 	})
 
 	Context("Module CR", func() {
@@ -205,6 +269,28 @@ spec:
 				}
 			}
 			Expect(found).To(BeTrue(), "should have a release entry with name=KubeRay")
+
+			Eventually(func(g Gomega) {
+				out, err := kubectlGetJsonpath("get", "ray", "default-ray",
+					"-o", "jsonpath={.status.releases}")
+				g.Expect(err).NotTo(HaveOccurred())
+				raw := strings.TrimSpace(out)
+				g.Expect(raw).NotTo(BeEmpty())
+
+				var current []release
+				g.Expect(json.Unmarshal([]byte(raw), &current)).To(Succeed())
+
+				foundPlatform := false
+				for _, r := range current {
+					if r.Name == "platform" {
+						foundPlatform = true
+						g.Expect(r.Version).To(Equal(platformHandshakeVersion),
+							"platform release version should echo odh-ray-config")
+						break
+					}
+				}
+				g.Expect(foundPlatform).To(BeTrue(), "should have a release entry with name=platform")
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 	})
 
@@ -232,6 +318,43 @@ spec:
 			Expect(err).NotTo(HaveOccurred())
 			Expect(strings.TrimSpace(out)).NotTo(BeEmpty(),
 				"at least one MutatingWebhookConfiguration should be registered for Ray")
+		})
+
+		It("should run the module operator as non-root", func() {
+			out, err := kubectlGetJsonpath("get", "deployment",
+				"ray-module-operator-controller-manager", "-n", namespace,
+				"-o", "jsonpath={.spec.template.spec.securityContext.runAsNonRoot}")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.TrimSpace(out)).To(Equal("true"))
+		})
+	})
+
+	Context("Webhook", func() {
+		It("should have a Ready cert-manager Certificate for the KubeRay webhook", func() {
+			Eventually(func(g Gomega) {
+				out, err := kubectlGetJsonpath("get", "certificate", "serving-cert", "-n", ns,
+					"-o", "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}")
+				g.Expect(err).NotTo(HaveOccurred(), "serving-cert Certificate should exist")
+				g.Expect(strings.TrimSpace(out)).To(Equal("True"), "serving-cert should be Ready")
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("should intercept RayCluster CREATE and UPDATE", func() {
+			By("admitting RayCluster CREATE via the mutating webhook")
+			out, err := applyYAML(rayClusterManifest(ns, rayClusterProbeName))
+			Expect(err).NotTo(HaveOccurred(), "RayCluster CREATE should be admitted: %s", out)
+
+			By("admitting RayCluster UPDATE via the mutating webhook")
+			cmd := exec.Command("kubectl", "label", "raycluster", rayClusterProbeName,
+				"-n", ns, "e2e.opendatahub.io/webhook=updated", "--overwrite")
+			outBytes, err := cmd.CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), "RayCluster UPDATE should be admitted: %s", outBytes)
+
+			By("deleting the probe RayCluster")
+			cmd = exec.Command("kubectl", "delete", "raycluster", rayClusterProbeName,
+				"-n", ns, "--ignore-not-found", "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "failed to delete probe RayCluster")
 		})
 	})
 
