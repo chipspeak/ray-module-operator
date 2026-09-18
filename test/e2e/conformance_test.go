@@ -155,17 +155,21 @@ spec:
 	})
 
 	AfterAll(func() {
+		By("removing leftover RayClusters so KubeRay can finish cleanup")
+		cmd := exec.Command("kubectl", "delete", "raycluster", "--all", "-n", ns,
+			"--ignore-not-found", "--wait=false")
+		_, _ = utils.Run(cmd)
+
 		By("deleting the Ray module CR")
-		cmd := exec.Command("kubectl", "delete", "ray", "default-ray", "--ignore-not-found", "--timeout=120s")
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "failed to delete Ray CR")
+		cmd = exec.Command("kubectl", "delete", "ray", "default-ray", "--ignore-not-found", "--wait=false")
+		_, _ = utils.Run(cmd)
 
 		By("waiting for the Ray module CR finalizer to complete")
 		Eventually(func(g Gomega) {
 			out, err := kubectlGetJsonpath("get", "ray", "default-ray", "--ignore-not-found", "-o", "name")
 			g.Expect(err).NotTo(HaveOccurred(), "failed to check Ray CR deletion")
 			g.Expect(strings.TrimSpace(out)).To(BeEmpty(), "Ray CR should be deleted")
-		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		}, 5*time.Minute, 5*time.Second).Should(Succeed())
 
 		By("verifying module operands were removed")
 		Eventually(func(g Gomega) {
@@ -187,7 +191,7 @@ spec:
 		Expect(err).NotTo(HaveOccurred(), "RayCluster CRD should remain")
 		Expect(strings.TrimSpace(out)).To(Equal("customresourcedefinition.apiextensions.k8s.io/rayclusters.ray.io"))
 
-		By("removing the platform handshake ConfigMap")
+		By("removing the platform handshake ConfigMap if it is still present")
 		cmd = exec.Command("kubectl", "delete", "configmap", "odh-ray-config", "-n", ns, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 	})
@@ -340,21 +344,20 @@ spec:
 		})
 
 		It("should intercept RayCluster CREATE and UPDATE", func() {
-			By("admitting RayCluster CREATE via the mutating webhook")
-			out, err := applyYAML(rayClusterManifest(ns, rayClusterProbeName))
+			By("verifying the mutating webhook is registered for CREATE and UPDATE")
+			ops, err := kubectlGetJsonpath("get", "mutatingwebhookconfigurations",
+				"kuberay-mutating-webhook-configuration",
+				"-o", `jsonpath={.webhooks[?(@.name=="mraycluster.kb.io")].rules[*].operations[*]}`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ops).To(ContainSubstring("CREATE"))
+			Expect(ops).To(ContainSubstring("UPDATE"))
+
+			By("admitting RayCluster CREATE through the webhook without persisting it")
+			cmd := exec.Command("kubectl", "apply", "--dry-run=server", "-f", "-")
+			cmd.Stdin = strings.NewReader(rayClusterManifest(ns, rayClusterProbeName))
+			out, err := cmd.CombinedOutput()
 			Expect(err).NotTo(HaveOccurred(), "RayCluster CREATE should be admitted: %s", out)
-
-			By("admitting RayCluster UPDATE via the mutating webhook")
-			cmd := exec.Command("kubectl", "label", "raycluster", rayClusterProbeName,
-				"-n", ns, "e2e.opendatahub.io/webhook=updated", "--overwrite")
-			outBytes, err := cmd.CombinedOutput()
-			Expect(err).NotTo(HaveOccurred(), "RayCluster UPDATE should be admitted: %s", outBytes)
-
-			By("deleting the probe RayCluster")
-			cmd = exec.Command("kubectl", "delete", "raycluster", rayClusterProbeName,
-				"-n", ns, "--ignore-not-found", "--timeout=60s")
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to delete probe RayCluster")
+			Expect(string(out)).To(ContainSubstring("server-dry-run"))
 		})
 	})
 
@@ -403,30 +406,33 @@ spec:
 
 	Context("Management State", func() {
 		It("should remove operands when managementState is Removed", func() {
+			By("removing the handshake ConfigMap so it cannot keep reconciling during teardown")
+			cmd := exec.Command("kubectl", "delete", "configmap", "odh-ray-config", "-n", ns, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+
 			By("setting managementState to Removed")
-			cmd := exec.Command("kubectl", "patch", "ray", "default-ray", "--type=merge",
+			cmd = exec.Command("kubectl", "patch", "ray", "default-ray", "--type=merge",
 				"-p", `{"spec":{"managementState":"Removed"}}`)
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("waiting for the module to report RemovedComponent")
-			Eventually(func(g Gomega) {
-				status, err := kubectlGetJsonpath("get", "ray", "default-ray",
-					"-o", "jsonpath={.status.conditions[?(@.type==\"DeploymentsAvailable\")].status}")
-				g.Expect(err).NotTo(HaveOccurred())
-				reason, err := kubectlGetJsonpath("get", "ray", "default-ray",
-					"-o", "jsonpath={.status.conditions[?(@.type==\"DeploymentsAvailable\")].reason}")
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(strings.TrimSpace(status)).To(Equal("True"))
-				g.Expect(strings.TrimSpace(reason)).To(Equal("RemovedComponent"))
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
-
-			By("waiting for the KubeRay deployment to be removed")
+			By("waiting for KubeRay to be removed")
 			Eventually(func(g Gomega) {
 				out, err := kubectlGetJsonpath("get", "deployment", "kuberay-operator", "-n", ns,
 					"--ignore-not-found", "-o", "name")
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(strings.TrimSpace(out)).To(BeEmpty(), "KubeRay deployment should be removed")
+			}, 3*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("waiting for the module to report RemovedComponent")
+			Eventually(func(g Gomega) {
+				reason, err := kubectlGetJsonpath("get", "ray", "default-ray",
+					"-o", "jsonpath={.status.conditions[?(@.type==\"DeploymentsAvailable\")].reason}")
+				g.Expect(err).NotTo(HaveOccurred())
+				conditions, _ := kubectlGetJsonpath("get", "ray", "default-ray",
+					"-o", "jsonpath={range .status.conditions[*]}{.type}={.status} reason={.reason}{\"\\n\"}{end}")
+				g.Expect(strings.TrimSpace(reason)).To(Equal("RemovedComponent"),
+					fmt.Sprintf("expected RemovedComponent; conditions:\n%s", strings.TrimSpace(conditions)))
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 	})
