@@ -357,7 +357,7 @@ spec:
 			cmd.Stdin = strings.NewReader(rayClusterManifest(ns, rayClusterProbeName))
 			out, err := cmd.CombinedOutput()
 			Expect(err).NotTo(HaveOccurred(), "RayCluster CREATE should be admitted: %s", out)
-			Expect(string(out)).To(ContainSubstring("server-dry-run"))
+			Expect(string(out)).To(ContainSubstring("server dry run"))
 		})
 	})
 
