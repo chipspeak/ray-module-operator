@@ -127,16 +127,22 @@ jobs:
               rf"\g<1>v{version}\g<2>",
               text,
           )
-          text = re.sub(
+          text, count = re.subn(
               r"want v[0-9.]+ from params\.env fallback",
               f"want v{version} from params.env fallback",
               text,
           )
-          text = re.sub(
-              r'(resolveKubeRayVersion\(testManifestsPath\)\n\tif got != ")v[0-9.]+(")',
+          if count != 1:
+              raise SystemExit(f"expected one fallback failure-message replacement, got {count}")
+
+          text, count = re.subn(
+              r'(func TestResolveKubeRayVersionDigestOnlyFallback\(.*?if got != ")v[0-9.]+(")',
               rf"\g<1>v{version}\g<2>",
               text,
+              flags=re.DOTALL,
           )
+          if count != 1:
+              raise SystemExit(f"expected one digest-only fallback assertion replacement, got {count}")
           path.write_text(text)
 
           path = Path("internal/controller/ray_controller_test.go")
